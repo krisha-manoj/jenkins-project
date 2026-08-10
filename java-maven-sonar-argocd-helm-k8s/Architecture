@@ -1,0 +1,20 @@
+┌──────────────┐         ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
+│   GitHub     │ Build   │    Maven     │  Yes    │  SonarQube   │  Yes    │    Docker    │
+│  (Source     │ Trigger │  (Build &    │────────▶│  (Static     │────────▶│  (Build &    │
+│   Code)      │────────▶│   Test)      │         │   Analysis)  │         │   Push)      │
+└──────────────┘         └──────────────┘         └──────────────┘         └──────────────┘
+                                │                        │                        │
+                                │ No (Build Fail)        │ No (Quality Gate Fail) │
+                                ▼                        ▼                        ▼
+                          ┌──────────┐            ┌──────────┐           ┌──────────────────┐
+                          │  FAIL    │            │  FAIL    │           │  Docker Hub      │
+                          │  Exit    │            │  Exit    │           │  (krishasuman123/ │
+                          └──────────┘            └──────────┘           │   ultimate-cicd) │
+                                                                         └────────┬─────────┘
+                                                                                  │
+                                                                                  ▼
+┌──────────────┐         ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
+│  AWS EKS     │◀────────│   ArgoCD     │◀────────│   GitHub     │◀────────│   Jenkins    │
+│  (jenkinsproj│  Deploy │  (Auto Sync) │  Watch  │  (Manifests  │  Update │  (Image      │
+│   Cluster)   │         │              │         │   Repo)      │  Tag    │   Updater)   │
+└──────────────┘         └──────────────┘         └──────────────┘         └──────────────┘
