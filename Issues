@@ -1,0 +1,187 @@
+1) Issues encountered during building Jenkins Pipeline ( build failed for 9 times )
+
+Issue 1: SonarQube Plugin Not Found
+Error: No plugin found for prefix 'sonar'
+
+What happened: Ran mvn sonar:sonar but Maven didn't know what the sonar plugin was.
+
+How we identified: Checked the console output — Maven searched all plugin groups and couldn't find it.
+
+How we fixed: Added the SonarQube Maven plugin to pom.xml:
+
+
+<plugin>
+    <groupId>org.sonarsource.scanner.maven</groupId>
+    <artifactId>sonar-maven-plugin</artifactId>
+    <version>3.9.1.2184</version>
+</plugin>
+
+Issue 2: SonarQube Server Unreachable
+Error: SonarQube server [http://35.166.44.155:9000] can not be reached — connect timed out
+
+What happened: Pipeline ran inside a Docker container on EC2 and tried to reach SonarQube via the EC2 public IP.
+
+How we identified: Realized Docker containers can't reach their host's public IP from inside.
+
+How we fixed: Changed Jenkinsfile to use EC2 private IP:
+
+
+SONAR_URL = "http://172.31.25.181:9000"
+
+Issue 3: Java Version Mismatch
+Error: UnsupportedClassVersionError: class file version 61.0, only recognizes up to 55.0
+
+What happened: SonarQube 10.4 needs Java 17 (version 61.0) but the Docker agent only had Java 11 (version 55.0).
+
+How we identified: Checked the Docker agent's Java version:
+
+
+docker run --rm abhishekf5/maven-abhishek-docker-agent:v1 java -version
+# → Java 11
+How we fixed: Built a new Docker agent with Java 17:
+
+
+cat > Dockerfile << 'EOF'
+FROM maven:3.9.6-eclipse-temurin-17
+RUN apt-get update && apt-get install -y docker.io && rm -rf /var/lib/apt/lists/*
+EOF
+docker build -t krishasuman123/maven-docker-agent:v2 .
+docker push krishasuman123/maven-docker-agent:v2
+Updated Jenkinsfile: image 'krishasuman123/maven-docker-agent:v2'
+
+Issue 4: Not in a Git Directory
+
+Error: fatal: not in a git directory
+
+What happened: The Update Deployment File stage ran git config but the workspace had no .git directory.
+
+How we identified: Checked the Checkout stage — it only did echo passed, never cloned the repo.
+
+How we fixed: Updated Checkout stage to actually clone:
+
+
+stage('Checkout') {
+  steps {
+    git branch: 'main', url: 'https://github.com/krisha-manoj/Jenkinsproj.git', credentialsId: 'github-creds'
+  }
+}
+
+Issue 5: Dubious Ownership in Repository
+Error: fatal: detected dubious ownership in repository at '/var/lib/jenkins/workspace/jenkinscicd'
+
+What happened: Docker container runs as root but workspace files are owned by Jenkins user (UID 105). Git blocks operations for safety.
+
+How we identified: Added pwd and ls -la debug commands — saw .git exists but owned by different user.
+
+How we fixed: Added safe.directory before git operations:
+
+
+git config --global --add safe.directory /var/lib/jenkins/workspace/jenkinscicd
+
+Issue 6: Nothing to Commit (sed Failed Silently)
+Error: nothing added to commit but untracked files present
+
+What happened: sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" found nothing to replace because the file already had :10 instead of replaceImageTag.
+
+How we identified: Realized replaceImageTag was a one-time placeholder that was already replaced in a previous build.
+
+How we fixed: Changed sed to match any existing tag:
+
+
+# Before (only works once):
+sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" deployment.yml
+
+# After (works every time):
+sed -i "s/ultimate-cicd:.*/ultimate-cicd:${BUILD_NUMBER}/g" deployment.yml
+
+2) How to integrate it using EKS :
+
+ArgoCD Integration on EKS — Steps Followed
+Why We Moved from Minikube to EKS
+Docker images built on EC2 (x86_64) couldn't run on Mac's Minikube (ARM)
+Error: exec format error — architecture mismatch
+Solution: Deploy ArgoCD on EKS where everything is x86
+Step 1: Created New EKS Cluster
+
+# Created cluster "jenkinsproj" from AWS Console
+aws eks update-kubeconfig --name jenkinsproj --region us-west-2
+Step 2: Fixed Cluster Security Group
+Error: dial tcp: i/o timeout
+
+
+aws ec2 authorize-security-group-ingress --region us-west-2 \
+  --group-id sg-0022bac0229aca77e --protocol all --cidr 172.31.0.0/16
+Step 3: Added IAM User Access
+Error: the server has asked for the client to provide credentials
+
+
+aws eks create-access-entry --region us-west-2 --cluster-name jenkinsproj \
+  --principal-arn arn:aws:iam::307946644949:user/oregonuser --type STANDARD
+
+aws eks associate-access-policy --region us-west-2 --cluster-name jenkinsproj \
+  --principal-arn arn:aws:iam::307946644949:user/oregonuser \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+  --access-scope type=cluster
+Step 4: Created Node Group (2 nodes already running)
+Verified:
+
+
+kubectl get nodes
+Step 5: Installed ArgoCD on EKS
+
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl get pods -n argocd
+Waited until all pods showed 1/1 Running.
+
+Step 6: Created ArgoCD Application
+
+cat > ~/app.yml << 'EOF'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: spring-boot-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/krisha-manoj/Jenkinsproj.git
+    targetRevision: main
+    path: java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+EOF
+
+kubectl apply -f ~/app.yml
+Step 7: Exposed ArgoCD UI
+Attempted: LoadBalancer → Failed (Classic LB TLS issues, empty response)
+
+What worked: Port-forward from EC2:
+
+
+pkill -f "port-forward"
+kubectl port-forward svc/argocd-server -n argocd 8443:443 --address 0.0.0.0 &
+Opened port 8443 on EC2 security group:
+
+
+aws ec2 authorize-security-group-ingress --region us-west-2 \
+  --group-id <EC2-SG-ID> --protocol tcp --port 8443 --cidr <MY_IP>/32
+Step 8: Accessed ArgoCD UI
+URL: https://35.166.44.155:8443
+Username: admin
+Password:
+
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+Step 9: Verified Application Deployed
+
+kubectl get applications -n argocd
+# → spring-boot-app   Synced   Healthy
+
+kubectl get pods -n default
+# → spring-boot-app pods Running
+
