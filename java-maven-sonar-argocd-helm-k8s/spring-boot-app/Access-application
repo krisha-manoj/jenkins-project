@@ -1,0 +1,15 @@
+How to Access It
+Once the spring-boot-app pods are running on EKS, expose the service:
+
+
+# Check if the service exists
+kubectl get svc -n default
+If spring-boot-app-service shows as NodePort (from the deployment manifests), expose it via LoadBalancer or port-forward:
+
+Option A: Port-forward (Quick test)
+
+kubectl port-forward svc/spring-boot-app-service -n default 9090:80 --address 0.0.0.0 &
+Open port 9090 on EC2 security group, then access:
+
+
+http://35.166.44.155:9090
