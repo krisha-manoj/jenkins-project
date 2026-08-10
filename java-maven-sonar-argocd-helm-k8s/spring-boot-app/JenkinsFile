@@ -8,7 +8,7 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
-       git branch: 'main', url: 'https://github.com/krisha-manoj/Jenkinsproj.git', credentialsId: 'github-creds'
+       git branch: 'main', url: 'https://github.com/krisha-manoj/jenkinsproj.git', credentialsId: 'github-creds'
       }
     }
     stage('Build and Test') {
