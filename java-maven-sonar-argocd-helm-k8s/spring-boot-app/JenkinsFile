@@ -50,8 +50,7 @@ stage('Update Deployment File') {
     steps {
         withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
             sh '''
-                pwd
-                ls -la
+                git config --global --add safe.directory /var/lib/jenkins/workspace/jenkinscicd
                 git config --global user.email "krishasuman123@gmail.com"
                 git config --global user.name "Krisha Manoj"
                 BUILD_NUMBER=${BUILD_NUMBER}
